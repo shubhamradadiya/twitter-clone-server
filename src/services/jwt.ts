@@ -6,7 +6,7 @@ import { JWTUser } from "../interfaces";
 const JWT_SECRET = "$uper@1234"
 
 class JWTService {
-    public static  generateTokenForUser(user:User){
+    public static  generateTokenForUser( user:User){
        
         const payload:JWTUser = {
             id: user?.id,
@@ -16,9 +16,9 @@ class JWTService {
         return token ;
     }   
 
-    public static decodeToken(token:string){
+    public static  decodeToken(token:string){
        try {
-        return JWT.verify(token,JWT_SECRET) as JWTUser;
+        return  JWT.verify(token,JWT_SECRET) as JWTUser;
        } catch (error) {
          return null;
        }

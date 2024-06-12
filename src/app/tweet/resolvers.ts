@@ -9,7 +9,7 @@ interface CreateTweetPayload {
 }
 
 const queries={
-    getAllTweets:()=>prismaClient.tweet.findMany({orderBy:{createdAt:"desc"}}),
+    getAllTweets:async()=> await prismaClient.tweet.findMany({orderBy:{createdAt:"desc"}}),
 }
 
 const mutation={
@@ -33,8 +33,12 @@ const mutation={
 
 const extraResolvers = {
     Tweet :{
-        author:(parent:Tweet) => prismaClient.user.findUnique({where:{id:parent.authorId}}),
+        author:async (parent:Tweet) => {
+          const tweet = await  prismaClient.user.findUnique({where:{id:parent.authorId}});
+          return tweet;
+        } 
     }
+
 }
 
 export const resolvers = {mutation ,extraResolvers,queries};
