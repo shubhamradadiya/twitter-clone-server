@@ -3,71 +3,15 @@ import { prismaClient } from '../../clients/db';
 import { PrismaClient, User } from '@prisma/client';
 import JWTService from '../../services/jwt';
 import { GraphqlContext } from '../../interfaces';
+import UserService from '../../services/user';
+import {redisClient} from '../../clients/redis';
 
 
-interface GoogleTokenResult{
-    iss?: string; 
-    azp?: string; 
-    aud?: string; 
-    sub?: string; 
-    email?: string|undefined; 
-    email_verified?: string; 
-    nbf?: string; 
-    name?: string; 
-    picture?: string; 
-    given_name?: string; 
-    family_name?: string; 
-    iat?: string; 
-    exp?: string; 
-    jti?: string; 
-    alg?: string; 
-    kid?: string; 
-    typ?: string; 
-}
 
 const queries ={
     verifyGoogleToken : async(parent:any ,{token}:{token:string})=>{
-    const googleToken = token;
-    const  googleOauthURL =  new URL('https://oauth2.googleapis.com/tokeninfo')
-    googleOauthURL.searchParams.set('id_token',googleToken)
-    
-    const {data}= await axios.get<GoogleTokenResult>(googleOauthURL.toString(),{
-        responseType: 'json',
-    }) 
-    
-    if (!data.email) {
-        throw new Error('Email not found in Google token');
-    }
-   
-    const user = await prismaClient.user.findUnique({
-        where:{
-            email:data?.email
-        }
-    });
-
-
-    if(!user){
-     await prismaClient.user.create({
-        data:{
-           email:data.email,
-           firstName:data.given_name ||"",
-           lastName:data.given_name ||"",
-           profileImageURL:data.picture,
-        }
-     })
-    }
-
-    const userInDb = await prismaClient.user.findUnique({
-        where:{
-            email:data.email
-        }
-    });
-
-    if(!userInDb) throw new Error("User with  Email  not found not found")
-
-    const  userToken = JWTService.generateTokenForUser(userInDb);
-
-    return userToken ;
+     const resultToken = await UserService.verifyGoogleAuthToken(token);
+     return resultToken;
  },
 
     getCurrentUser: async(parent:any, arg:any , ctx : GraphqlContext)=>{
@@ -75,7 +19,7 @@ const queries ={
        const  id =ctx.user?.id;
        if(!id) return null; 
 
-       const user = await prismaClient.user.findUnique({where:{id}})
+       const user = await UserService.getUserById(id);
        return user
     },
 
@@ -84,9 +28,7 @@ const queries ={
          ctx : GraphqlContext
         ) => {
             try {
-             return   await prismaClient.user.findUnique(
-                    {where:{id}},  
-                ) 
+             return   await UserService.getUserById(id);
             } catch (error) {
                 console.log(error)
                 return null;
@@ -98,10 +40,105 @@ const queries ={
 
 const extraResolvers = {
     User :{
+        //todo tweets
         tweets:async(parent:User)=>{
           return await prismaClient.tweet.findMany({where:{ author: {id: parent.id}}})
+        },
+
+        //todo followers
+        followers:async(parent:User)=>{
+            const result=await prismaClient.follows.findMany({
+                where:{ following: {id: parent.id}},
+                include: {  
+                    follower:true
+                }  
+            
+            })
+            return result.map((el)=>el.follower)
+        },
+        //todo following
+        following:async(parent:User)=>{
+          const result= await prismaClient.follows.findMany({
+            where:{  follower: {id: parent.id}},
+            include: {  
+                following:true
+            }
+        })
+          return result.map((el)=>el.following);
+        },
+
+        //todo suggestionUsers
+        recommendedUsers: async(parent:User, _:any , ctx:GraphqlContext)=>{
+            if(!ctx.user) return [];
+            //?Redis cash  value get
+            const cashValue = await redisClient.get(`RECOMMENDED_USER:${ctx.user.id}`);
+          
+            if(cashValue) {
+                console.log("first cash value!!!!!!!!")
+                console.log(cashValue)
+                return JSON.parse(cashValue)
+            }
+
+            const myFollowings = await prismaClient.follows.findMany({
+                where:{
+                    follower:{id:ctx.user.id}
+                },
+                  include:{
+                    following : {
+                        include:{followers :{ include:{following:true} }}
+                    }
+                  }
+            })
+
+
+            const users: User[] = []
+
+                        //current A following B 
+            for(const currentUserFollowing of myFollowings){
+                        //B following C
+                for(const followingOfFollowedUser of currentUserFollowing?.following?.followers){
+                    if(followingOfFollowedUser?.following?.id !== ctx.user.id &&
+                        myFollowings.findIndex(
+                            (el)=>el?.followingId === followingOfFollowedUser?.following?.id)<0
+                    ){
+
+                            users.push( followingOfFollowedUser.following);
+                    }
+                }
+            }
+            console.log("not cash value!!!!!!!!")
+
+            //? Redis cash value
+            await redisClient.set(
+                `RECOMMENDED_USER:${ctx.user.id}`,
+                JSON.stringify(users)
+            )
+
+            return users;
         }
+
     }
 }
 
-export const  resolvers ={queries ,extraResolvers}
+const mutations ={
+     followUser:async (parent:any ,{to}:{to:string},ctx:GraphqlContext )=>{
+        if(!ctx.user||!ctx.user.id) throw new Error ("unAuthorized for follow")
+        
+        await UserService.followUser(ctx.user.id , to );
+
+        await redisClient.del(`RECOMMENDED_USER:${ctx.user.id}`)
+        return true;
+       
+     },
+     unfollowUser:async (parent:any ,{to}:{to:string},ctx:GraphqlContext )=>{
+        if(!ctx.user||!ctx.user.id) throw new Error ("unAuthorized for follow")
+        
+        await UserService.unfollowUser(ctx.user.id , to );
+      
+        await redisClient.del(`RECOMMENDED_USER:${ctx.user.id}`)
+        return true;
+       
+     }
+}
+
+export const  resolvers ={queries ,extraResolvers ,mutations}
