@@ -17,7 +17,7 @@ const s3Client = new S3Client({
 const queries={
     getAllTweets:async()=> TweetService.getAllTweets(),
 
-    //S3 requests 
+    //todo S3 requests 
     getSignedURLForTweet : async(
         parent: any,
         {imageType , imageName}:{imageType:string , imageName:string},
@@ -34,6 +34,7 @@ const queries={
 
         const putObjectCommand = new PutObjectCommand({
           Bucket: process.env.AWS_S3_BUCKET,
+          ContentType: imageType,
           Key:`upload/${ctx.user.id}/tweets/${imageName}-${Date.now().toString()}.${imageType}`
         });
 
